@@ -1,0 +1,289 @@
+/* Custom styles for Student Feedback Analysis */
+
+:root {
+    --primary-color: #84adec;
+    --success-color: #198754;
+    --info-color: #0dcaf0;
+    --warning-color: #ffc107;
+    --danger-color: #dc3545;
+    --light-color: #f8f9fa;
+    --dark-color: #212529;
+}
+
+body {
+    background: linear-gradient(135deg, #5e84cb 0%, #6fa0f4 100%);
+    min-height: 100vh;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.container-fluid {
+    background: rgba(255, 255, 255, 0.98);
+    backdrop-filter: blur(10px);
+    border-radius: 20px;
+    margin: 20px;
+    padding: 0;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+}
+
+/* Header Styles */
+header {
+    background: linear-gradient(135deg, #7c97f0, #3b82f6);
+    color: white;
+    border-radius: 20px 20px 0 0;
+    margin: 0;
+}
+
+header h1 {
+    color: #ffd700 !important;
+    text-shadow: 3px 3px 12px rgba(0, 0, 0, 0.8);
+    margin: 0;
+    font-weight: 800;
+    letter-spacing: 1px;
+}
+
+/* Force header text colors with high specificity */
+header .display-4,
+header h1.display-4,
+header .text-primary {
+    color: #ffd700 !important;
+}
+
+header p,
+header .lead,
+header p.lead {
+    color: #ffffff !important;
+    text-shadow: 2px 2px 6px rgba(0, 0, 0, 0.7);
+    font-weight: 500;
+    font-size: 1.2rem;
+}
+
+/* Additional specificity for Bootstrap classes */
+.container-fluid header h1,
+.container-fluid header .display-4 {
+    color: #ffd700 !important;
+}
+
+.container-fluid header p,
+.container-fluid header .lead {
+    color: #ffffff !important;
+}
+
+/* Card Styles */
+.card {
+    border: none;
+    border-radius: 15px;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 15px 30px rgba(0, 0, 0, 0.15) !important;
+}
+
+.card-header {
+    border-radius: 15px 15px 0 0 !important;
+    border: none;
+    padding: 1.5rem;
+}
+
+.card-body {
+    padding: 2rem;
+}
+
+/* Form Styles */
+.form-control {
+    border-radius: 10px;
+    border: 2px solid #e9ecef;
+    padding: 1rem;
+    font-size: 1.1rem;
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    background-color: #ffffff;
+    color: #212529;
+}
+
+.form-control:focus {
+    border-color: #1e40af;
+    box-shadow: 0 0 0 0.2rem rgba(30, 64, 175, 0.25);
+    background-color: #ffffff;
+}
+
+.form-label {
+    color: #1f2937 !important;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.form-text {
+    color: #6b7280 !important;
+}
+
+/* Button Styles */
+.btn {
+    border-radius: 10px;
+    padding: 0.75rem 2rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    transition: all 0.3s ease;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, #1e40af, #3b82f6);
+    border: none;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: linear-gradient(135deg, #1e3a8a, #2563eb);
+    transform: translateY(-2px);
+    box-shadow: 0 10px 20px rgba(30, 64, 175, 0.4);
+    color: white;
+}
+
+/* Results Styles */
+#results .card-header {
+    font-weight: 600;
+}
+
+#sentimentIcon i,
+#topicIcon i {
+    transition: transform 0.3s ease;
+}
+
+#sentimentIcon:hover i,
+#topicIcon:hover i {
+    transform: scale(1.1);
+}
+
+/* Sentiment Colors */
+.sentiment-positive {
+    color: var(--success-color) !important;
+}
+
+.sentiment-neutral {
+    color: var(--warning-color) !important;
+}
+
+.sentiment-negative {
+    color: var(--danger-color) !important;
+}
+
+/* Topic Colors */
+.topic-lecturer {
+    color: var(--primary-color) !important;
+}
+
+.topic-training_program {
+    color: var(--info-color) !important;
+}
+
+.topic-facility {
+    color: var(--success-color) !important;
+}
+
+.topic-others {
+    color: var(--warning-color) !important;
+}
+
+/* Loading Spinner */
+.spinner-border {
+    width: 3rem;
+    height: 3rem;
+}
+
+/* Alert Styles */
+.alert {
+    border-radius: 10px;
+    border: none;
+    padding: 1.5rem;
+}
+
+/* Blockquote Styles */
+blockquote {
+    border-left: 4px solid var(--primary-color);
+    padding-left: 1.5rem;
+    font-style: italic;
+    color: var(--dark-color);
+}
+
+/* Footer Styles */
+footer {
+    background: var(--light-color);
+    border-radius: 0 0 20px 20px;
+    margin: 0;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .container-fluid {
+        margin: 10px;
+        border-radius: 15px;
+    }
+    
+    header {
+        border-radius: 15px 15px 0 0;
+        padding: 2rem 1rem !important;
+    }
+    
+    header h1 {
+        font-size: 2rem;
+    }
+    
+    .card-body {
+        padding: 1.5rem;
+    }
+    
+    .btn {
+        padding: 0.75rem 1.5rem;
+    }
+}
+
+/* Animation Classes */
+.fade-in {
+    animation: fadeIn 0.5s ease-in;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.slide-up {
+    animation: slideUp 0.5s ease-out;
+}
+
+@keyframes slideUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--primary-color);
+    border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #0056b3;
+}
