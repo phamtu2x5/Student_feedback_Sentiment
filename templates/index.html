@@ -11,23 +11,18 @@
 <body>
     <div class="container-fluid">
         <!-- Header -->
-        <header class="text-center py-4 mb-4">
-            <div class="row">
-                <div class="col-12">
-                    <h1 class="display-4 fw-bold text-primary">
-                        <i class="fas fa-graduation-cap me-3"></i>
-                        Student Feedback Analysis
-                    </h1>
-                    <p class="lead text-muted">Phân tích sentiment và topic cho feedback của sinh viên</p>
-                </div>
-            </div>
+        <header>
+            <h1 class="display-4 fw-bold text-primary">
+                <i class="fas fa-graduation-cap me-3"></i>
+                Student Feedback Analysis
+            </h1>
         </header>
 
         <!-- Main Content -->
         <div class="row justify-content-center">
             <div class="col-lg-8">
                 <!-- Input Form -->
-                <div class="card shadow-lg mb-4">
+                <div class="card shadow-lg">
                     <div class="card-header bg-primary text-white">
                         <h3 class="card-title mb-0">
                             <i class="fas fa-comment-dots me-2"></i>
@@ -44,7 +39,7 @@
                                 <textarea 
                                     class="form-control" 
                                     id="feedbackText" 
-                                    rows="4" 
+                                    rows="5" 
                                     placeholder="Nhập feedback về giảng viên, chương trình đào tạo, cơ sở vật chất..."
                                     required
                                 ></textarea>
@@ -75,7 +70,7 @@
                 <div id="results" style="display: none;">
                     <!-- Sentiment Result -->
                     <div class="card shadow-lg mb-3">
-                        <div class="card-header bg-success text-white">
+                        <div class="card-header bg-primary text-white">
                             <h4 class="card-title mb-0">
                                 <i class="fas fa-heart me-2"></i>
                                 Phân loại cảm xúc của feedback
@@ -98,7 +93,7 @@
 
                     <!-- Topic Result -->
                     <div class="card shadow-lg mb-4">
-                        <div class="card-header bg-info text-white">
+                        <div class="card-header bg-primary text-white">
                             <h4 class="card-title mb-0">
                                 <i class="fas fa-tags me-2"></i>
                                 Chủ đề liên quan đến nội dung feedback
@@ -121,7 +116,7 @@
 
                     <!-- Original Text -->
                     <div class="card shadow-sm">
-                        <div class="card-header bg-light">
+                        <div class="card-header bg-primary text-white">
                             <h5 class="card-title mb-0">
                                 <i class="fas fa-quote-left me-2"></i>
                                 Feedback Gốc
@@ -145,20 +140,15 @@
 
         <!-- Footer -->
         <footer class="text-center py-4 mt-5">
-            <div class="row">
-                <div class="col-12">
-                    <p class="text-muted mb-0">
-                        <i class="fas fa-robot me-2"></i>
-                        Powered by Tư _ Đức _ Nghĩa _ Hà
-                    </p>
-                </div>
-            </div>
+            <p class="text-muted mb-0">
+                <i class="fas fa-robot me-2"></i>
+                Powered by Tư _ Đức _ Nghĩa _ Hà
+            </p>
         </footer>
     </div>
 
-    <!-- Bootstrap JS -->
+    <!-- Scripts -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <!-- Custom JS -->
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

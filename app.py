@@ -15,21 +15,20 @@ print("🔄 Đang tải tokenizer và model từ Hugging Face...")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO, use_fast=False)
 
 # 🔹 Tải trọng số model (.bin) trực tiếp từ Hugging Face
-state_dict = torch.hub.load_state_dict_from_url(
-    f"https://huggingface.co/{MODEL_REPO}/resolve/main/multitask_model.bin",
-    map_location=device
-)
+MODEL_URL = f"https://huggingface.co/{MODEL_REPO}/resolve/main/multitask_model.bin"
+state_dict = torch.hub.load_state_dict_from_url(MODEL_URL, map_location=device)
 
 model = PhoBERTMultiTask(num_sentiment=3, num_topic=4)
-model.load_state_dict(state_dict)
+model.load_state_dict(state_dict, strict=False)
 model.to(device)
 model.eval()
+
 print("✅ Model đã sẵn sàng!")
 
 # ====== ROUTES ======
 @app.route("/", methods=["GET"])
 def home():
-    return render_template('index.html')
+    return render_template("index.html")
 
 @app.route("/api/health", methods=["GET"])
 def health():
@@ -49,7 +48,9 @@ def predict():
             return jsonify({"error": "Text quá dài. Vui lòng nhập tối đa 1000 ký tự."}), 400
 
         # Tokenize
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, padding=True, max_length=128).to(device)
+        inputs = tokenizer(
+            text, return_tensors="pt", truncation=True, padding=True, max_length=128
+        ).to(device)
 
         # Inference
         with torch.no_grad():
@@ -74,5 +75,5 @@ def predict():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    # Hugging Face luôn yêu cầu port = 7860
+    app.run(host="0.0.0.0", port=7860)
