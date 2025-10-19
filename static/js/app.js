@@ -71,37 +71,12 @@ document.addEventListener('DOMContentLoaded', function() {
     const examples = [
         "Giảng viên giảng bài rất hay và dễ hiểu, sinh viên rất thích",
         "Thầy cô rất nhiệt tình và hỗ trợ sinh viên học tập tốt",
-        "Giảng viên có kiến thức sâu rộng và phương pháp dạy hiệu quả",
-        "Thầy cô rất tận tâm và luôn sẵn sàng giải đáp thắc mắc",
-        "Phong cách giảng dạy của giảng viên rất thu hút và dễ hiểu",
         "Chương trình học rất phù hợp và bổ ích cho sinh viên",
-        "Nội dung môn học rất thực tế và có tính ứng dụng cao",
-        "Cấu trúc chương trình học rất logic và dễ theo dõi",
-        "Môn học này giúp sinh viên phát triển kỹ năng tốt",
-        "Chương trình đào tạo rất toàn diện và chất lượng",
         "Cơ sở vật chất rất hiện đại và đầy đủ tiện nghi",
-        "Phòng học rộng rãi, thoáng mát và có đầy đủ thiết bị",
-        "Thư viện rất đẹp và có nhiều tài liệu hữu ích",
-        "Khuôn viên trường rất đẹp và môi trường học tập tốt",
-        "Phòng thực hành được trang bị đầy đủ và hiện đại",
         "Giảng viên giảng bài quá nhanh và khó hiểu",
-        "Thầy cô không nhiệt tình và ít quan tâm đến sinh viên",
-        "Phương pháp dạy của giảng viên rất nhàm chán",
-        "Giảng viên không sẵn sàng giải đáp thắc mắc của sinh viên",
-        "Thầy cô có thái độ không tốt với sinh viên",
         "Chương trình học quá khó và không phù hợp với sinh viên",
-        "Nội dung môn học quá lý thuyết và thiếu thực hành",
-        "Cấu trúc chương trình rối rắm và khó theo dõi",
-        "Môn học này không có tính ứng dụng thực tế",
-        "Chương trình đào tạo quá nặng và áp lực",
         "Phòng học quá nóng và không có điều hòa, rất khó chịu",
-        "Cơ sở vật chất cũ kỹ và thiếu thiết bị cần thiết",
-        "Thư viện quá nhỏ và thiếu chỗ ngồi",
-        "Khuôn viên trường không được bảo trì tốt",
-        "Phòng thực hành thiếu thiết bị và không đảm bảo an toàn",
-        "Môn học này có nội dung bình thường, không có gì đặc biệt",
-        "Giảng viên dạy ổn, không có gì nổi bật",
-        "Chương trình học có thể chấp nhận được"
+        "Môn học này có nội dung bình thường, không có gì đặc biệt"
     ];
 
     // Utility Functions
@@ -132,12 +107,7 @@ document.addEventListener('DOMContentLoaded', function() {
             elements.textarea.value = '';
             elements.results.style.display = 'none';
             elements.errorMessage.style.display = 'none';
-            
-            const charCount = document.getElementById('charCount');
-            const charCounter = document.querySelector('.form-text');
-            
-            if (charCount) charCount.textContent = '0';
-            if (charCounter) charCounter.style.color = '#6c757d';
+            this.updateCharCounter();
         },
 
         updateResult(type, value) {
@@ -209,6 +179,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 elements.results.style.display = 'block';
                 elements.results.classList.add('fade-in');
                 utils.scrollToResults();
+                
+                // Reload feedback history after successful analysis
+                loadFeedbackHistory(1);
             } else {
                 utils.showError(data.error || 'Có lỗi xảy ra khi phân tích feedback!');
             }
@@ -239,23 +212,24 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
-    // Dynamic Button Creation
-    function createButton(text, icon, className, onClick) {
-        const btn = document.createElement('button');
-        btn.type = 'button';
-        btn.className = className;
-        btn.innerHTML = `<i class="fas ${icon} me-2"></i>${text}`;
-        btn.onclick = onClick;
-        return btn;
-    }
-
-    // Add buttons container
+    // Add utility buttons
     const buttonContainer = document.createElement('div');
     buttonContainer.className = 'd-flex justify-content-center gap-2 mt-3';
     
-    buttonContainer.appendChild(createButton('Xóa Form', 'fa-trash', 'btn btn-outline-secondary', utils.clearForm));
-    buttonContainer.appendChild(createButton('Ví Dụ', 'fa-lightbulb', 'btn btn-outline-info', showExamples));
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'btn btn-outline-secondary';
+    clearBtn.innerHTML = '<i class="fas fa-trash me-2"></i>Xóa Form';
+    clearBtn.onclick = () => utils.clearForm();
     
+    const exampleBtn = document.createElement('button');
+    exampleBtn.type = 'button';
+    exampleBtn.className = 'btn btn-outline-info';
+    exampleBtn.innerHTML = '<i class="fas fa-lightbulb me-2"></i>Ví Dụ';
+    exampleBtn.onclick = showExamples;
+    
+    buttonContainer.appendChild(clearBtn);
+    buttonContainer.appendChild(exampleBtn);
     elements.form.appendChild(buttonContainer);
 
     // Add character counter
@@ -263,4 +237,142 @@ document.addEventListener('DOMContentLoaded', function() {
     charCounter.className = 'form-text text-muted';
     charCounter.innerHTML = '<i class="fas fa-info-circle me-1"></i>Độ dài: <span id="charCount">0</span> ký tự';
     elements.textarea.parentNode.appendChild(charCounter);
+
+    // Load feedback history
+    loadFeedbackHistory();
 });
+
+// Feedback History Functions
+let currentPage = 1;
+const itemsPerPage = 5;
+
+async function loadFeedbackHistory(page = 1) {
+    const historyLoading = document.getElementById('historyLoading');
+    const historyContent = document.getElementById('historyContent');
+    const historyPagination = document.getElementById('historyPagination');
+    
+    historyLoading.style.display = 'block';
+    historyContent.innerHTML = '';
+    historyPagination.innerHTML = '';
+    
+    try {
+        const response = await fetch(`/api/feedback-history?page=${page}&per_page=${itemsPerPage}`);
+        const data = await response.json();
+        
+        if (response.ok) {
+            displayFeedbackHistory(data.feedbacks);
+            displayPagination(data, page);
+        } else {
+            historyContent.innerHTML = '<p class="text-muted text-center">Không thể tải lịch sử feedback.</p>';
+        }
+    } catch (error) {
+        console.error('Error loading feedback history:', error);
+        historyContent.innerHTML = '<p class="text-muted text-center">Có lỗi xảy ra khi tải lịch sử.</p>';
+    } finally {
+        historyLoading.style.display = 'none';
+    }
+}
+
+function displayFeedbackHistory(feedbacks) {
+    const historyContent = document.getElementById('historyContent');
+    
+    if (feedbacks.length === 0) {
+        historyContent.innerHTML = '<p class="text-muted text-center">Chưa có feedback nào. Hãy phân tích feedback đầu tiên!</p>';
+        return;
+    }
+    
+    let html = '';
+    feedbacks.forEach(feedback => {
+        const sentimentConfig = getSentimentConfig(feedback.sentiment);
+        const topicConfig = getTopicConfig(feedback.topic);
+        const date = new Date(feedback.created_at).toLocaleString('vi-VN');
+        
+        html += `
+            <div class="card mb-3 border-start border-4 border-${getSentimentColor(feedback.sentiment)}">
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-8">
+                            <p class="card-text">${feedback.text}</p>
+                            <small class="text-muted">
+                                <i class="fas fa-clock me-1"></i>${date}
+                            </small>
+                        </div>
+                        <div class="col-md-4 text-end">
+                            <div class="mb-2">
+                                <span class="badge bg-${getSentimentColor(feedback.sentiment)} me-2">
+                                    <i class="fas ${sentimentConfig.icon} me-1"></i>
+                                    ${sentimentConfig.label}
+                                </span>
+                                <span class="badge bg-secondary">
+                                    <i class="fas ${topicConfig.icon} me-1"></i>
+                                    ${topicConfig.label}
+                                </span>
+                            </div>
+                            <div class="small text-muted">
+                                <div>Tin cậy: ${(feedback.sentiment_confidence * 100).toFixed(1)}%</div>
+                                <div>Chủ đề: ${(feedback.topic_confidence * 100).toFixed(1)}%</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    historyContent.innerHTML = html;
+}
+
+function displayPagination(data, currentPage) {
+    const historyPagination = document.getElementById('historyPagination');
+    
+    if (data.pages <= 1) return;
+    
+    let html = '<nav><ul class="pagination pagination-sm">';
+    
+    // Previous button
+    if (data.has_prev) {
+        html += `<li class="page-item"><a class="page-link" href="#" onclick="loadFeedbackHistory(${currentPage - 1})">Trước</a></li>`;
+    }
+    
+    // Page numbers
+    for (let i = 1; i <= data.pages; i++) {
+        const active = i === currentPage ? 'active' : '';
+        html += `<li class="page-item ${active}"><a class="page-link" href="#" onclick="loadFeedbackHistory(${i})">${i}</a></li>`;
+    }
+    
+    // Next button
+    if (data.has_next) {
+        html += `<li class="page-item"><a class="page-link" href="#" onclick="loadFeedbackHistory(${currentPage + 1})">Sau</a></li>`;
+    }
+    
+    html += '</ul></nav>';
+    historyPagination.innerHTML = html;
+}
+
+function getSentimentConfig(sentiment) {
+    const configs = {
+        positive: { icon: 'fa-smile', label: 'Tích Cực' },
+        neutral: { icon: 'fa-meh', label: 'Trung Tính' },
+        negative: { icon: 'fa-frown', label: 'Tiêu Cực' }
+    };
+    return configs[sentiment] || configs.neutral;
+}
+
+function getTopicConfig(topic) {
+    const configs = {
+        lecturer: { icon: 'fa-user-tie', label: 'Giảng Viên' },
+        training_program: { icon: 'fa-graduation-cap', label: 'Chương Trình' },
+        facility: { icon: 'fa-building', label: 'Cơ Sở Vật Chất' },
+        others: { icon: 'fa-ellipsis-h', label: 'Khác' }
+    };
+    return configs[topic] || configs.others;
+}
+
+function getSentimentColor(sentiment) {
+    const colors = {
+        positive: 'success',
+        neutral: 'warning',
+        negative: 'danger'
+    };
+    return colors[sentiment] || 'secondary';
+}
