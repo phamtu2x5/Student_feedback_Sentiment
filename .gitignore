@@ -12,6 +12,9 @@ phobert_multitask_model/
 *.pt
 *.pth
 
+# Database instance
+instance/
+
 # IDE / hệ thống
 .DS_Store
 .idea/

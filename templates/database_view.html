@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+
+{% block title %}Xem Database - Student Feedback Analysis{% endblock %}
+{% block page_title %}Quản Lý Database{% endblock %}
+{% block footer %}{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+    /* Use global styles - remove custom database styling */
+    .table thead th { color: #374151; }
+    .table tbody td { color: #374151; }
+</style>
+{% endblock %}
+
+{% block content %}
+        <!-- Thống kê tổng quan -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <i class="fas fa-users fa-3x mb-3" style="color: #3B82F6 !important;"></i>
+                        <h3 class="card-title">{{ total_users }}</h3>
+                        <p class="card-text">Tổng số người dùng</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card text-center">
+                    <div class="card-body">
+                        <i class="fas fa-comments fa-3x mb-3" style="color: #10B981 !important;"></i>
+                        <h3 class="card-title">{{ total_feedbacks }}</h3>
+                        <p class="card-text">Tổng số feedback</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Biểu đồ thống kê -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-chart-pie me-2" style="color: #F59E0B !important;"></i>Phân bố Sentiment</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="sentimentChart" width="400" height="200"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-chart-bar me-2" style="color: #F3F4F6 !important;"></i>Phân bố Topic</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="topicChart" width="400" height="200"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Feedback gần nhất -->
+        <div class="card mb-4">
+            <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-history me-2" style="color: #EF4444 !important;"></i>Feedback Gần Nhất</h5>
+            </div>
+            <div class="card-body">
+                {% if recent_feedbacks %}
+                    <div class="table-responsive">
+                        <table class="table table-striped">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>User</th>
+                                    <th>Feedback</th>
+                                    <th>Sentiment</th>
+                                    <th>Topic</th>
+                                    <th>Thời gian</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for feedback in recent_feedbacks %}
+                                <tr>
+                                    <td>{{ feedback.id }}</td>
+                                    <td>{{ feedback.user.username }}</td>
+                                    <td>
+                                        <div style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">
+                                            {{ feedback.text }}
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-{{ 'success' if feedback.sentiment == 'positive' else 'warning' if feedback.sentiment == 'neutral' else 'danger' }}">
+                                            {{ feedback.sentiment }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-secondary">{{ feedback.topic }}</span>
+                                    </td>
+                                    <td>{{ feedback.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <p class="text-muted text-center">Chưa có feedback nào.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Thống kê chi tiết -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-chart-line me-2" style="color: #06B6D4 !important;"></i>Feedback theo ngày (7 ngày gần nhất)</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="dailyChart" width="400" height="200"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-info-circle me-2" style="color: #84CC16 !important;"></i>Thông tin Database</h5>
+                    </div>
+                    <div class="card-body">
+                        <ul class="list-group list-group-flush">
+                            <li class="list-group-item d-flex justify-content-between">
+                                <span>Loại database:</span>
+                                <span class="badge bg-primary">SQLite</span>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between">
+                                <span>Bảng chính:</span>
+                                <span>users, feedbacks</span>
+                            </li>
+                            <li class="list-group-item d-flex justify-content-between">
+                                <span>Trạng thái:</span>
+                                <span class="badge bg-success">Hoạt động</span>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden data elements -->
+    <div id="sentiment-data" style="display: none;">{{ sentiment_stats | tojson | safe }}</div>
+    <div id="topic-data" style="display: none;">{{ topic_stats | tojson | safe }}</div>
+    <div id="daily-data" style="display: none;">{{ daily_stats | tojson | safe }}</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Initialize charts when page loads
+    document.addEventListener('DOMContentLoaded', function() {
+        // Get data from hidden elements
+        const sentimentData = JSON.parse(document.getElementById('sentiment-data').textContent);
+        const topicData = JSON.parse(document.getElementById('topic-data').textContent);
+        const dailyData = JSON.parse(document.getElementById('daily-data').textContent);
+
+        // Sentiment Chart
+        const sentimentLabels = sentimentData.map(item => item.sentiment);
+        const sentimentCounts = sentimentData.map(item => item.count);
+        new Chart(document.getElementById('sentimentChart'), {
+            type: 'doughnut',
+            data: {
+                labels: sentimentLabels,
+                datasets: [{
+                    data: sentimentCounts,
+                    backgroundColor: ['#28a745', '#ffc107', '#dc3545']
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                        labels: {
+                            generateLabels: function(chart) {
+                                const data = chart.data;
+                                if (data.labels.length && data.datasets.length) {
+                                    const dataset = data.datasets[0];
+                                    const total = dataset.data.reduce((a, b) => a + b, 0);
+                                    return data.labels.map((label, i) => {
+                                        const value = dataset.data[i];
+                                        const percentage = ((value / total) * 100).toFixed(1);
+                                        return {
+                                            text: `${label}: ${value} (${percentage}%)`,
+                                            fillStyle: dataset.backgroundColor[i],
+                                            strokeStyle: dataset.backgroundColor[i],
+                                            lineWidth: 1,
+                                            hidden: false,
+                                            index: i
+                                        };
+                                    });
+                                }
+                                return [];
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Topic Chart
+        const topicLabels = topicData.map(item => item.topic);
+        const topicCounts = topicData.map(item => item.count);
+        new Chart(document.getElementById('topicChart'), {
+            type: 'bar',
+            data: {
+                labels: topicLabels,
+                datasets: [{
+                    data: topicCounts,
+                    backgroundColor: ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6']
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true } },
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                }
+            }
+        });
+
+        // Daily Chart
+        const dailyLabels = dailyData.map(item => item.date);
+        const dailyCounts = dailyData.map(item => item.count);
+        new Chart(document.getElementById('dailyChart'), {
+            type: 'line',
+            data: {
+                labels: dailyLabels,
+                datasets: [{
+                    label: 'Feedback/ngày',
+                    data: dailyCounts,
+                    borderColor: '#28a745',
+                    backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { y: { beginAtZero: true } }
+            }
+        });
+    });
+</script>
+{% endblock %}
