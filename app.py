@@ -8,7 +8,6 @@ from forms import RegistrationForm, LoginForm
 from PhoBERTMultiTask import PhoBERTMultiTask
 
 app = Flask(__name__)
-
 # Cấu hình
 app.config['SECRET_KEY'] = 'your-secret-key-change-this-in-production'
 # Sử dụng đường dẫn database phù hợp với Hugging Face Spaces
