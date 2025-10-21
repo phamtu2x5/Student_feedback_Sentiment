@@ -97,7 +97,7 @@
                                     <td>
                                         <span class="badge bg-secondary">{{ feedback.topic }}</span>
                                     </td>
-                                    <td>{{ feedback.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
+                                    <td>{{ utc_to_vietnam_time(feedback.created_at).strftime('%d/%m/%Y %H:%M') }}</td>
                                 </tr>
                                 {% endfor %}
                             </tbody>

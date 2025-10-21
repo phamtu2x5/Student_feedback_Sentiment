@@ -1,5 +1,7 @@
 import os
 import torch
+import csv
+import io
 from transformers import AutoTokenizer
 from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
@@ -7,10 +9,24 @@ from functools import wraps
 from models import db, User, Feedback
 from forms import RegistrationForm, LoginForm
 from PhoBERTMultiTask import PhoBERTMultiTask
+from datetime import datetime, timedelta
+import pytz
 
 app = Flask(__name__)
 # Cấu hình
 app.config['SECRET_KEY'] = 'your-secret-key-change-this-in-production'
+
+# Thiết lập múi giờ Việt Nam
+VIETNAM_TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
+
+def utc_to_vietnam_time(utc_datetime):
+    """Chuyển đổi thời gian UTC sang múi giờ Việt Nam"""
+    if utc_datetime is None:
+        return None
+    # Nếu datetime không có timezone info, coi như UTC
+    if utc_datetime.tzinfo is None:
+        utc_datetime = pytz.utc.localize(utc_datetime)
+    return utc_datetime.astimezone(VIETNAM_TIMEZONE)
 # Sử dụng đường dẫn database phù hợp với Hugging Face Spaces
 db_path = os.path.join(os.getcwd(), 'instance', 'feedback_analysis.db')
 os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -24,6 +40,11 @@ login_manager.init_app(app)
 login_manager.login_view = 'login'
 login_manager.login_message = 'Vui lòng đăng nhập để sử dụng hệ thống phân tích feedback.'
 login_manager.login_message_category = 'info'
+
+# Thêm hàm chuyển đổi múi giờ vào template context
+@app.context_processor
+def utility_processor():
+    return dict(utc_to_vietnam_time=utc_to_vietnam_time)
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -213,15 +234,64 @@ def view_database():
 @app.route("/api/feedback-history", methods=["GET"])
 @login_required
 def get_feedback_history():
-    """Lấy lịch sử feedback của user hiện tại"""
+    """Lấy lịch sử feedback của user hiện tại với filter thời gian"""
     try:
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 10, type=int)
+        time_filter = request.args.get('time_filter', 'all', type=str)
+        start_date = request.args.get('start_date', None, type=str)
+        end_date = request.args.get('end_date', None, type=str)
         
-        # Lấy feedback của user hiện tại, sắp xếp theo thời gian mới nhất
-        feedbacks = Feedback.query.filter_by(user_id=current_user.id)\
-                                 .order_by(Feedback.created_at.desc())\
-                                 .paginate(page=page, per_page=per_page, error_out=False)
+        # Tạo query base
+        query = Feedback.query.filter_by(user_id=current_user.id)
+        
+        # Áp dụng filter thời gian
+        if time_filter != 'all':
+            vietnam_now = utc_to_vietnam_time(datetime.utcnow())
+            
+            if time_filter == 'today':
+                # Từ đầu ngày hôm nay đến hiện tại
+                today_start = vietnam_now.replace(hour=0, minute=0, second=0, microsecond=0)
+                today_start_utc = today_start.astimezone(pytz.utc).replace(tzinfo=None)
+                query = query.filter(Feedback.created_at >= today_start_utc)
+                
+            elif time_filter == 'week':
+                # 1 tuần trước đến hiện tại
+                week_ago = vietnam_now - timedelta(days=7)
+                week_ago_utc = week_ago.astimezone(pytz.utc).replace(tzinfo=None)
+                query = query.filter(Feedback.created_at >= week_ago_utc)
+                
+            elif time_filter == 'month':
+                # 1 tháng trước đến hiện tại
+                month_ago = vietnam_now - timedelta(days=30)
+                month_ago_utc = month_ago.astimezone(pytz.utc).replace(tzinfo=None)
+                query = query.filter(Feedback.created_at >= month_ago_utc)
+                
+            elif time_filter == 'custom' and start_date and end_date:
+                # Filter theo ngày tùy chỉnh
+                try:
+                    start_datetime = datetime.strptime(start_date, '%Y-%m-%d')
+                    end_datetime = datetime.strptime(end_date, '%Y-%m-%d')
+                    
+                    # Chuyển đổi sang UTC
+                    start_datetime_utc = VIETNAM_TIMEZONE.localize(start_datetime).astimezone(pytz.utc).replace(tzinfo=None)
+                    end_datetime_utc = VIETNAM_TIMEZONE.localize(end_datetime.replace(hour=23, minute=59, second=59)).astimezone(pytz.utc).replace(tzinfo=None)
+                    
+                    query = query.filter(Feedback.created_at >= start_datetime_utc, 
+                                       Feedback.created_at <= end_datetime_utc)
+                except ValueError:
+                    return jsonify({'error': 'Định dạng ngày không hợp lệ'}), 400
+        
+        # Đếm tổng số feedback theo filter (không phân trang)
+        total_count = query.count()
+        
+        # Debug: In thông tin filter
+        print(f"🔍 Filter Debug - time_filter: {time_filter}, start_date: {start_date}, end_date: {end_date}")
+        print(f"🔍 Total feedbacks after filter: {total_count}")
+        
+        # Sắp xếp theo thời gian mới nhất và phân trang
+        feedbacks = query.order_by(Feedback.created_at.desc())\
+                         .paginate(page=page, per_page=per_page, error_out=False)
         
         feedback_list = []
         for feedback in feedbacks.items:
@@ -232,12 +302,12 @@ def get_feedback_history():
                 'topic': feedback.topic,
                 'sentiment_confidence': feedback.sentiment_confidence,
                 'topic_confidence': feedback.topic_confidence,
-                'created_at': feedback.created_at.isoformat()
+                'created_at': utc_to_vietnam_time(feedback.created_at).strftime('%H:%M:%S %d/%m/%Y')
             })
         
         return jsonify({
             'feedbacks': feedback_list,
-            'total': feedbacks.total,
+            'total': total_count,  # Sử dụng total_count thay vì feedbacks.total
             'pages': feedbacks.pages,
             'current_page': page,
             'has_next': feedbacks.has_next,
@@ -345,6 +415,170 @@ with app.app_context():
         print(f"⚠️ Lỗi khi tạo/cập nhật admin: {e}")
     
     print("✅ Database đã sẵn sàng!")
+
+@app.route("/analyze-csv", methods=["POST"])
+@login_required
+def analyze_csv():
+    """Phân tích nhiều feedback từ file CSV"""
+    try:
+        if 'csvFile' not in request.files:
+            return jsonify({'error': 'Không tìm thấy file CSV'}), 400
+        
+        file = request.files['csvFile']
+        if file.filename == '':
+            return jsonify({'error': 'Chưa chọn file'}), 400
+        
+        if not file.filename.lower().endswith('.csv'):
+            return jsonify({'error': 'File phải có định dạng CSV'}), 400
+        
+        # Đọc và validate file CSV
+        try:
+            # Thử decode file với UTF-8
+            file_content = file.stream.read().decode("UTF8")
+        except UnicodeDecodeError:
+            return jsonify({'error': 'File CSV phải được mã hóa UTF-8. Vui lòng lưu file với encoding UTF-8 và thử lại.'}), 400
+        
+        try:
+            stream = io.StringIO(file_content, newline=None)
+            csv_input = csv.DictReader(stream)
+            
+            # Kiểm tra file có header không
+            if not csv_input.fieldnames:
+                return jsonify({'error': 'File CSV không có header (tên cột). Vui lòng thêm header vào file CSV.'}), 400
+            
+            # Tìm cột chứa feedback
+            feedback_column = None
+            available_columns = []
+            for col in csv_input.fieldnames:
+                available_columns.append(col)
+                if col.lower().strip() in ['feedback', 'text', 'content', 'comment']:
+                    feedback_column = col
+                    break
+            
+            if not feedback_column:
+                return jsonify({
+                    'error': f'Không tìm thấy cột chứa feedback. Các cột có sẵn: {", ".join(available_columns)}. Tên cột phải là: feedback, text, content hoặc comment'
+                }), 400
+            
+            # Kiểm tra file có dữ liệu không
+            rows = list(csv_input)
+            if not rows:
+                return jsonify({'error': 'File CSV không có dữ liệu (chỉ có header). Vui lòng thêm dữ liệu vào file.'}), 400
+                
+        except csv.Error as e:
+            return jsonify({'error': f'File CSV không đúng định dạng: {str(e)}. Vui lòng kiểm tra lại file CSV.'}), 400
+        except Exception as e:
+            return jsonify({'error': f'Lỗi khi đọc file CSV: {str(e)}'}), 400
+        
+        feedbacks = []
+        results = []
+        processed_count = 0
+        error_count = 0
+        
+        for row_num, row in enumerate(rows, start=1):  # Bắt đầu từ 1 vì hiển thị số dòng thực tế (trừ header)
+            feedback_text = row[feedback_column].strip()
+            
+            if not feedback_text:
+                error_count += 1
+                results.append({
+                    'row': row_num,
+                    'text': '',
+                    'error': 'Feedback trống'
+                })
+                continue
+            
+            try:
+                # Phân tích feedback
+                inputs = tokenizer(feedback_text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+                
+                with torch.no_grad():
+                    # Gọi model với đúng parameters
+                    sentiment_logits, topic_logits = model(inputs["input_ids"], inputs["attention_mask"])
+                    
+                    sentiment_probs = torch.softmax(sentiment_logits, dim=-1)
+                    topic_probs = torch.softmax(topic_logits, dim=-1)
+                    
+                    sentiment_pred = torch.argmax(sentiment_probs, dim=-1).item()
+                    topic_pred = torch.argmax(topic_probs, dim=-1).item()
+                    
+                    sentiment_confidence = sentiment_probs[0][sentiment_pred].item()
+                    topic_confidence = topic_probs[0][topic_pred].item()
+                
+                # Map predictions
+                sentiment_labels = ['negative', 'neutral', 'positive']
+                topic_labels = ['lecturer', 'training_program', 'facility', 'others']
+                
+                sentiment = sentiment_labels[sentiment_pred]
+                topic = topic_labels[topic_pred]
+                
+                # Lưu vào database
+                try:
+                    feedback = Feedback(
+                        text=feedback_text,
+                        sentiment=sentiment,
+                        topic=topic,
+                        sentiment_confidence=sentiment_confidence,
+                        topic_confidence=topic_confidence,
+                        user_id=current_user.id
+                    )
+                    db.session.add(feedback)
+                    feedbacks.append(feedback)
+                    
+                    results.append({
+                        'row': row_num,
+                        'text': feedback_text[:100] + '...' if len(feedback_text) > 100 else feedback_text,
+                        'sentiment': sentiment,
+                        'topic': topic,
+                        'sentiment_confidence': round(sentiment_confidence * 100, 1),
+                        'topic_confidence': round(topic_confidence * 100, 1),
+                        'success': True
+                    })
+                    
+                    processed_count += 1
+                    
+                except Exception as db_error:
+                    print(f"Database error for row {row_num}: {db_error}")
+                    error_count += 1
+                    results.append({
+                        'row': row_num,
+                        'text': feedback_text[:100] + '...' if len(feedback_text) > 100 else feedback_text,
+                        'error': f'Lỗi lưu database: {str(db_error)}'
+                    })
+                
+            except Exception as e:
+                error_count += 1
+                results.append({
+                    'row': row_num,
+                    'text': feedback_text[:100] + '...' if len(feedback_text) > 100 else feedback_text,
+                    'error': f'Lỗi phân tích: {str(e)}'
+                })
+        
+        # Commit tất cả feedback vào database
+        try:
+            db.session.commit()
+            print(f"✅ Đã lưu {processed_count} feedback vào database")
+        except Exception as commit_error:
+            db.session.rollback()
+            print(f"❌ Lỗi khi commit database: {commit_error}")
+            return jsonify({
+                'error': f'Lỗi khi lưu dữ liệu: {str(commit_error)}'
+            }), 500
+        
+        return jsonify({
+            'success': True,
+            'total_rows': len(results),
+            'processed_count': processed_count,
+            'error_count': error_count,
+            'results': results[:50],  # Chỉ trả về 50 kết quả đầu tiên để tránh response quá lớn
+            'message': f'Đã xử lý {processed_count}/{len(results)} feedback thành công'
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'error': f'Có lỗi xảy ra khi xử lý file CSV: {str(e)}'
+        }), 500
 
 if __name__ == "__main__":
     # Hugging Face Spaces configuration
