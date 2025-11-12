@@ -1,6 +1,4 @@
 // Student Feedback Analysis - Optimized JavaScript
-
-// ===== Global Utilities =====
 const Utils = {
     // Smooth scrolling with automatic offset calculation
     scrollToSection(el, extraOffset = 0) {
@@ -148,20 +146,21 @@ document.addEventListener('DOMContentLoaded', function() {
                 body: JSON.stringify({ text: feedbackText })
             });
             const data = await response.json();
+            console.log('Predict response:', data);
             if (response.ok) {
-                utils.updateResult('sentiment', data.sentiment);
-                utils.updateResult('topic', data.topic);
-                elements.originalText.textContent = feedbackText;
-                elements.results.style.display = 'block';
-                elements.results.classList.add('fade-in');
-                utils.scrollToResults();
+                // Display multiple topics with sentiments
+                displayMultipleResults(data.results, feedbackText);
                 
                 // Clear the textarea after successful analysis
                 elements.textarea.value = '';
                 utils.updateCharCounter();
                 
-                // Reload feedback history after successful analysis
-                loadFeedbackHistory(1);
+                // Reload feedback history after successful analysis with delay
+                // to ensure database has committed the new data
+                console.log('Reloading feedback history...');
+                setTimeout(() => {
+                    loadFeedbackHistory(1, false);
+                }, 500);
             } else {
                 utils.showError(data.error || 'Có lỗi xảy ra khi phân tích feedback!');
             }
@@ -258,8 +257,10 @@ async function loadFeedbackHistory(page = 1, shouldScroll = false) {
             ...filterParams
         });
         
+        console.log('Loading feedback history, page:', page);
         const response = await fetch(`/api/feedback-history?${queryParams.toString()}`);
         const data = await response.json();
+        console.log('Feedback history response:', data);
         if (response.ok) {
             displayFeedbackHistory(data.feedbacks);
             displayPagination(data, page);
@@ -463,6 +464,97 @@ function getSentimentColor(sentiment) {
     return colors[sentiment] || 'secondary';
 }
 
+// Display multiple topics with sentiments
+function displayMultipleResults(results, text) {
+    const elements = {
+        results: document.getElementById('results'),
+        originalText: document.getElementById('originalText')
+    };
+    
+    // Validate elements exist
+    if (!elements.results) {
+        console.error('❌ Results element not found');
+        return;
+    }
+    
+    if (!results || results.length === 0) {
+        // No topics detected or all below threshold
+        if (elements.originalText) elements.originalText.textContent = text;
+        elements.results.innerHTML = `
+            <div class="alert alert-warning">
+                <i class="fas fa-info-circle me-2"></i>
+                Không phát hiện topic rõ ràng trong feedback này.
+            </div>
+        `;
+        elements.results.style.display = 'block';
+        elements.results.classList.add('fade-in');
+        Utils.scrollToSection(elements.results, 105);
+        return;
+    }
+    
+    // Display original text first (before innerHTML clears it)
+    if (elements.originalText) {
+        elements.originalText.textContent = text;
+    }
+    
+    // Build HTML for multiple topics
+    let html = '<div class="mb-4"><h5 class="mb-3"><i class="fas fa-check-circle me-2"></i>Kết quả phân tích:</h5></div>';
+    html += '<div class="multiple-topics-container">';
+    
+    results.forEach(result => {
+        const sentimentConfig = getSentimentConfig(result.sentiment);
+        const topicConfig = getTopicConfig(result.topic);
+        const sentimentColor = getSentimentColor(result.sentiment);
+        
+        html += `
+            <div class="topic-sentiment-item mb-3">
+                <div class="d-flex align-items-center">
+                    <div class="flex-grow-1">
+                        <div class="d-flex align-items-center mb-2">
+                            <i class="fas ${topicConfig.icon} me-2" style="color: #6B7280;"></i>
+                            <span class="fw-semibold">${topicConfig.label}</span>
+                        </div>
+                        <div>
+                            <span class="badge bg-${sentimentColor} me-2">
+                                <i class="fas ${sentimentConfig.icon} me-1"></i>
+                                ${sentimentConfig.label}
+                            </span>
+                            <small class="text-muted">
+                                <i class="fas fa-percentage me-1"></i>
+                                Độ tin cậy: ${(result.confidence * 100).toFixed(1)}%
+                            </small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    
+    // Add original text to the end
+    html += `
+        <div class="card shadow-sm">
+            <div class="card-header bg-primary text-white">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-quote-left me-2"></i>
+                    Feedback Gốc
+                </h5>
+            </div>
+            <div class="card-body">
+                <blockquote class="blockquote mb-0">
+                    <p class="mb-0">${text}</p>
+                </blockquote>
+            </div>
+        </div>
+    `;
+    
+    elements.results.innerHTML = html;
+    elements.results.style.display = 'block';
+    elements.results.classList.add('fade-in');
+    Utils.scrollToSection(elements.results, 105);
+}
+
 // Time Filter Functions
 function initTimeFilter() {
     const timeFilterInputs = document.querySelectorAll('input[name="timeFilter"]');
@@ -580,15 +672,18 @@ function initAnalysisModeToggle() {
     const csvModeInput = document.getElementById('csvMode');
     const singleForm = document.getElementById('singleFeedbackForm');
     const csvForm = document.getElementById('csvUploadForm');
+    const results = document.getElementById('results');
     
     // Show single form by default
     singleForm.style.display = 'block';
     csvForm.style.display = 'none';
+    if (results) results.style.display = 'none'; // Hide results when switching to single mode
     
     singleModeInput.addEventListener('change', function() {
         if (this.checked) {
             singleForm.style.display = 'block';
             csvForm.style.display = 'none';
+            if (results) results.style.display = 'none'; // Hide CSV results
         }
     });
     

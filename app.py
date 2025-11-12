@@ -2,38 +2,70 @@ import os
 import torch
 import csv
 import io
+import atexit
+import schedule
+import time
+from threading import Thread
 from transformers import AutoTokenizer
 from flask import Flask, request, jsonify, render_template, redirect, url_for, flash
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from functools import wraps
 from models import db, User, Feedback
 from forms import RegistrationForm, LoginForm
-from PhoBERTMultiTask import PhoBERTMultiTask
+from PhoBERTPairABSA import PhoBERTPairABSA
 from datetime import datetime, timedelta
 import pytz
+from database_manager import db_manager
+from model_config import (
+    get_prompt, ASPECTS_EN, ASPECTS_VI, LABEL_MAP, MAX_LEN, PRED_THRESHOLD,
+    MIN_SENT_PROB, MIN_MARGIN,
+    _is_garbage, _aspect_has_kw, _has_any_kw, _norm_match, ASPECT_REVERSE_MAPPING,
+    BASE_MODEL, NUM_CLASSES, DROPOUT
+)
 
 app = Flask(__name__)
-# Cấu hình
 app.config['SECRET_KEY'] = 'your-secret-key-change-this-in-production'
 
-# Thiết lập múi giờ Việt Nam
+def backup_database(force: bool = False):
+    """Backup database to Hugging Face Hub"""
+    try:
+        return db_manager.backup_database(force=force)
+    except Exception:
+        return False
+
+def restore_database():
+    """Restore database from Hugging Face Hub"""
+    try:
+        return db_manager.restore_database()
+    except Exception:
+        return False
+
+def run_scheduler():
+    """Run scheduled backup every hour"""
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
+
+schedule.every().hour.do(backup_database)
+scheduler_thread = Thread(target=run_scheduler, daemon=True)
+scheduler_thread.start()
+atexit.register(backup_database)
+
 VIETNAM_TIMEZONE = pytz.timezone('Asia/Ho_Chi_Minh')
 
 def utc_to_vietnam_time(utc_datetime):
     """Chuyển đổi thời gian UTC sang múi giờ Việt Nam"""
     if utc_datetime is None:
         return None
-    # Nếu datetime không có timezone info, coi như UTC
     if utc_datetime.tzinfo is None:
         utc_datetime = pytz.utc.localize(utc_datetime)
     return utc_datetime.astimezone(VIETNAM_TIMEZONE)
-# Sử dụng đường dẫn database phù hợp với Hugging Face Spaces
+
 db_path = os.path.join(os.getcwd(), 'instance', 'feedback_analysis.db')
 os.makedirs(os.path.dirname(db_path), exist_ok=True)
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Khởi tạo extensions
 db.init_app(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
@@ -41,7 +73,6 @@ login_manager.login_view = 'login'
 login_manager.login_message = 'Vui lòng đăng nhập để sử dụng hệ thống phân tích feedback.'
 login_manager.login_message_category = 'info'
 
-# Thêm hàm chuyển đổi múi giờ vào template context
 @app.context_processor
 def utility_processor():
     return dict(utc_to_vietnam_time=utc_to_vietnam_time)
@@ -50,8 +81,109 @@ def utility_processor():
 def load_user(user_id):
     return User.query.get(int(user_id))
 
-# Decorator để yêu cầu quyền admin
+def analyze_feedback(text):
+    """Phân tích feedback với model Pair-ABSA"""
+    if tokenizer is None or model is None:
+        return []
+    
+    text = str(text).strip()
+    if _is_garbage(text):
+        return []
+    
+    s_norm = _norm_match(text)
+    
+    tau_len = float(PRED_THRESHOLD)
+    
+    logits_list = []
+    has_keywords = []
+    
+    with torch.no_grad():
+        for aspect_en in ASPECTS_EN:
+            aspect_vi = ASPECT_REVERSE_MAPPING.get(aspect_en, "khac")
+            prompt = get_prompt(aspect_en, sentence=text, use_subprompt=True)
+            
+            inputs = tokenizer(
+                prompt, text,
+                return_tensors="pt", 
+                truncation=True, 
+                padding=True, 
+                max_length=MAX_LEN
+            ).to(device)
+            
+            logits = model(inputs["input_ids"], inputs["attention_mask"]).squeeze(0)
+            logits_list.append(logits)
+            has_keywords.append(_aspect_has_kw(aspect_vi, s_norm))
+    
+    logits_tensor = torch.stack(logits_list, dim=0)
+    
+    probs = torch.softmax(logits_tensor, dim=-1)
+    p_none = probs[:, 0]
+    conf_not_none = 1.0 - p_none
+    
+    KW_BOOST = 0.08
+    conf_not_none_boosted = conf_not_none.clone()
+    for i, has_kw in enumerate(has_keywords):
+        if has_kw:
+            conf_not_none_boosted[i] = min(1.0, conf_not_none_boosted[i] + KW_BOOST)
+    
+    keep_indices = [i for i in range(len(ASPECTS_EN)) if conf_not_none_boosted[i] >= tau_len]
+    
+    if len(keep_indices) > 0:
+        tau_len_adjusted = tau_len - 0.12
+        for i in range(len(ASPECTS_EN)):
+            if i not in keep_indices and conf_not_none_boosted[i] >= tau_len_adjusted:
+                if has_keywords[i] or conf_not_none_boosted[i] >= tau_len_adjusted + 0.05:
+                    keep_indices.append(i)
+    
+    if not keep_indices:
+        return []
+    
+    results = []
+    for i in sorted(keep_indices, key=lambda j: float(conf_not_none_boosted[j]), reverse=True):
+        sent_probs = probs[i, 1:].clone()
+        top_idx = int(torch.argmax(sent_probs).item())
+        top_p = float(sent_probs[top_idx].item())
+        
+        sent_probs[top_idx] = -1.0
+        second_p = float(sent_probs.max().item())
+        margin = top_p - second_p
+        
+        min_margin_adj = MIN_MARGIN
+        if has_keywords[i]:
+            min_margin_adj = MIN_MARGIN - 0.01
+        
+        if top_p < MIN_SENT_PROB or margin < min_margin_adj:
+            continue
+        
+        sentiment_str = LABEL_MAP[top_idx + 1]
+        results.append({
+            "topic": ASPECTS_EN[i],
+            "sentiment": sentiment_str,
+            "confidence": float(conf_not_none_boosted[i].item()),
+            "sentiment_confidence": top_p,
+            "margin": margin
+        })
+    
+    results.sort(key=lambda x: x["confidence"], reverse=True)
+    return results
+
+def save_feedback_to_db(text, results, user_id):
+    """Lưu feedback results vào database"""
+    for result in results:
+        sentiment_conf = result.get('sentiment_confidence', result['confidence'])
+        topic_conf = result['confidence']
+        feedback = Feedback(
+            text=text,
+            sentiment=result['sentiment'],
+            topic=result['topic'],
+            sentiment_confidence=sentiment_conf,
+            topic_confidence=topic_conf,
+            user_id=user_id
+        )
+        db.session.add(feedback)
+
 def admin_required(f):
+    """Decorator để yêu cầu quyền admin"""
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not current_user.is_authenticated:
@@ -63,25 +195,27 @@ def admin_required(f):
     return decorated_function
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+MODEL_REPO = "Ptul2x5/Student_Feedback_Sentiment"
 
-# === Load tokenizer & model ===
-MODEL_REPO = "Ptul2x5/Student_Feedback_Sentiment"  # 🔹 Repo Hugging Face của bạn
+try:
+    os.environ['HF_HUB_ENABLE_HF_TRANSFER'] = '0'
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO, use_fast=False)
+    MODEL_URL = f"https://huggingface.co/{MODEL_REPO}/resolve/main/model.bin"
+    loaded = torch.hub.load_state_dict_from_url(MODEL_URL, map_location=device)
+    
+    if isinstance(loaded, dict) and "model_state" in loaded:
+        state_dict = loaded["model_state"]
+    else:
+        state_dict = loaded
+    
+    model = PhoBERTPairABSA(base_model=BASE_MODEL, num_cls=NUM_CLASSES, dropout=DROPOUT)
+    model.load_state_dict(state_dict, strict=False)
+    model.to(device)
+    model.eval()
+except Exception:
+    model = None
+    tokenizer = None
 
-print("🔄 Đang tải tokenizer và model từ Hugging Face...")
-tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO, use_fast=False)
-
-# 🔹 Tải trọng số model (.bin) trực tiếp từ Hugging Face
-MODEL_URL = f"https://huggingface.co/{MODEL_REPO}/resolve/main/multitask_model.bin"
-state_dict = torch.hub.load_state_dict_from_url(MODEL_URL, map_location=device)
-
-model = PhoBERTMultiTask(num_sentiment=3, num_topic=4)
-model.load_state_dict(state_dict, strict=False)
-model.to(device)
-model.eval()
-
-print("✅ Model đã sẵn sàng!")
-
-# ====== ROUTES ======
 @app.route("/", methods=["GET"])
 @login_required
 def home():
@@ -98,6 +232,7 @@ def register():
         user.set_password(form.password.data)
         db.session.add(user)
         db.session.commit()
+        backup_database()
         flash('Đăng ký thành công! Vui lòng đăng nhập.', 'success')
         return redirect(url_for('login'))
     
@@ -130,33 +265,27 @@ def logout():
 
 @app.route("/api/health", methods=["GET"])
 def health():
-    return jsonify({"status": "healthy", "message": "✅ PhoBERT MultiTask API is running!"})
+    return jsonify({"status": "healthy"})
 
 @app.route("/my-statistics")
 @login_required
 def my_statistics():
-    """Trang thống kê feedback cá nhân của user"""
     try:
-        # Lấy thống kê feedback của user hiện tại
         user_feedbacks = Feedback.query.filter_by(user_id=current_user.id).all()
         total_feedbacks = len(user_feedbacks)
         
-        # Thống kê sentiment
         sentiment_stats = db.session.query(
             Feedback.sentiment, 
             db.func.count(Feedback.id).label('count')
         ).filter_by(user_id=current_user.id).group_by(Feedback.sentiment).all()
         sentiment_stats = [{'sentiment': item.sentiment, 'count': item.count} for item in sentiment_stats]
         
-        # Thống kê topic
         topic_stats = db.session.query(
             Feedback.topic, 
             db.func.count(Feedback.id).label('count')
         ).filter_by(user_id=current_user.id).group_by(Feedback.topic).all()
         topic_stats = [{'topic': item.topic, 'count': item.count} for item in topic_stats]
         
-        # Thống kê theo ngày (30 ngày gần nhất)
-        from datetime import datetime, timedelta
         thirty_days_ago = datetime.now() - timedelta(days=30)
         daily_stats = db.session.query(
             db.func.date(Feedback.created_at).label('date'),
@@ -169,7 +298,6 @@ def my_statistics():
         ).order_by('date').all()
         daily_stats = [{'date': str(item.date), 'count': item.count} for item in daily_stats]
         
-        # Feedback gần nhất của user
         recent_feedbacks = Feedback.query.filter_by(user_id=current_user.id)\
                                        .order_by(Feedback.created_at.desc()).limit(10).all()
         
@@ -186,31 +314,23 @@ def my_statistics():
 @app.route("/admin/database")
 @admin_required
 def view_database():
-    """Trang xem database với giao diện đẹp"""
     try:
-        # Lấy thống kê tổng quan
         total_users = User.query.count()
         total_feedbacks = Feedback.query.count()
-        
-        # Lấy feedbacks gần nhất
         recent_feedbacks = Feedback.query.order_by(Feedback.created_at.desc()).limit(10).all()
         
-        # Thống kê sentiment
         sentiment_stats = db.session.query(
             Feedback.sentiment, 
             db.func.count(Feedback.id).label('count')
         ).group_by(Feedback.sentiment).all()
         sentiment_stats = [{'sentiment': item.sentiment, 'count': item.count} for item in sentiment_stats]
         
-        # Thống kê topic
         topic_stats = db.session.query(
             Feedback.topic, 
             db.func.count(Feedback.id).label('count')
         ).group_by(Feedback.topic).all()
         topic_stats = [{'topic': item.topic, 'count': item.count} for item in topic_stats]
         
-        # Thống kê theo ngày (7 ngày gần nhất)
-        from datetime import datetime, timedelta
         seven_days_ago = datetime.now() - timedelta(days=7)
         daily_stats = db.session.query(
             db.func.date(Feedback.created_at).label('date'),
@@ -234,7 +354,6 @@ def view_database():
 @app.route("/api/feedback-history", methods=["GET"])
 @login_required
 def get_feedback_history():
-    """Lấy lịch sử feedback của user hiện tại với filter thời gian"""
     try:
         page = request.args.get('page', 1, type=int)
         per_page = request.args.get('per_page', 10, type=int)
@@ -242,56 +361,35 @@ def get_feedback_history():
         start_date = request.args.get('start_date', None, type=str)
         end_date = request.args.get('end_date', None, type=str)
         
-        # Tạo query base
         query = Feedback.query.filter_by(user_id=current_user.id)
         
-        # Áp dụng filter thời gian
         if time_filter != 'all':
             vietnam_now = utc_to_vietnam_time(datetime.utcnow())
             
             if time_filter == 'today':
-                # Từ đầu ngày hôm nay đến hiện tại
                 today_start = vietnam_now.replace(hour=0, minute=0, second=0, microsecond=0)
                 today_start_utc = today_start.astimezone(pytz.utc).replace(tzinfo=None)
                 query = query.filter(Feedback.created_at >= today_start_utc)
-                
             elif time_filter == 'week':
-                # 1 tuần trước đến hiện tại
                 week_ago = vietnam_now - timedelta(days=7)
                 week_ago_utc = week_ago.astimezone(pytz.utc).replace(tzinfo=None)
                 query = query.filter(Feedback.created_at >= week_ago_utc)
-                
             elif time_filter == 'month':
-                # 1 tháng trước đến hiện tại
                 month_ago = vietnam_now - timedelta(days=30)
                 month_ago_utc = month_ago.astimezone(pytz.utc).replace(tzinfo=None)
                 query = query.filter(Feedback.created_at >= month_ago_utc)
-                
             elif time_filter == 'custom' and start_date and end_date:
-                # Filter theo ngày tùy chỉnh
                 try:
                     start_datetime = datetime.strptime(start_date, '%Y-%m-%d')
                     end_datetime = datetime.strptime(end_date, '%Y-%m-%d')
-                    
-                    # Chuyển đổi sang UTC
                     start_datetime_utc = VIETNAM_TIMEZONE.localize(start_datetime).astimezone(pytz.utc).replace(tzinfo=None)
                     end_datetime_utc = VIETNAM_TIMEZONE.localize(end_datetime.replace(hour=23, minute=59, second=59)).astimezone(pytz.utc).replace(tzinfo=None)
-                    
-                    query = query.filter(Feedback.created_at >= start_datetime_utc, 
-                                       Feedback.created_at <= end_datetime_utc)
+                    query = query.filter(Feedback.created_at >= start_datetime_utc, Feedback.created_at <= end_datetime_utc)
                 except ValueError:
                     return jsonify({'error': 'Định dạng ngày không hợp lệ'}), 400
         
-        # Đếm tổng số feedback theo filter (không phân trang)
         total_count = query.count()
-        
-        # Debug: In thông tin filter
-        print(f"🔍 Filter Debug - time_filter: {time_filter}, start_date: {start_date}, end_date: {end_date}")
-        print(f"🔍 Total feedbacks after filter: {total_count}")
-        
-        # Sắp xếp theo thời gian mới nhất và phân trang
-        feedbacks = query.order_by(Feedback.created_at.desc())\
-                         .paginate(page=page, per_page=per_page, error_out=False)
+        feedbacks = query.order_by(Feedback.created_at.desc()).paginate(page=page, per_page=per_page, error_out=False)
         
         feedback_list = []
         for feedback in feedbacks.items:
@@ -307,7 +405,7 @@ def get_feedback_history():
         
         return jsonify({
             'feedbacks': feedback_list,
-            'total': total_count,  # Sử dụng total_count thay vì feedbacks.total
+            'total': total_count,
             'pages': feedbacks.pages,
             'current_page': page,
             'has_next': feedbacks.has_next,
@@ -326,100 +424,81 @@ def predict():
         if not text:
             return jsonify({"error": "Missing 'text' field"}), 400
 
-        # Validate input length
         if len(text) > 1000:
             return jsonify({"error": "Text quá dài. Vui lòng nhập tối đa 1000 ký tự."}), 400
 
-        # Tokenize
-        inputs = tokenizer(
-            text, return_tensors="pt", truncation=True, padding=True, max_length=128
-        ).to(device)
+        if tokenizer is None or model is None:
+            return jsonify({"error": "Model or tokenizer not loaded. Please restart the application."}), 500
 
-        # Inference
-        with torch.no_grad():
-            logits_sent, logits_topic = model(inputs["input_ids"], inputs["attention_mask"])
-            sent = torch.argmax(logits_sent, dim=1).item()
-            topic = torch.argmax(logits_topic, dim=1).item()
+        results = analyze_feedback(text)
 
-        # Mapping
-        SENTIMENT_MAP = {0: "negative", 1: "neutral", 2: "positive"}
-        TOPIC_MAP = {0: "lecturer", 1: "training_program", 2: "facility", 3: "others"}
-        
-        sentiment = SENTIMENT_MAP[sent]
-        topic_result = TOPIC_MAP[topic]
-        sentiment_confidence = float(torch.softmax(logits_sent, dim=1).max().item())
-        topic_confidence = float(torch.softmax(logits_topic, dim=1).max().item())
-
-        # Lưu feedback vào database
         try:
-            feedback = Feedback(
-                text=text,
-                sentiment=sentiment,
-                topic=topic_result,
-                sentiment_confidence=sentiment_confidence,
-                topic_confidence=topic_confidence,
-                user_id=current_user.id
-            )
-            db.session.add(feedback)
+            save_feedback_to_db(text, results, current_user.id)
             db.session.commit()
-        except Exception as db_error:
-            print(f"Database error: {db_error}")
-            # Không dừng quá trình nếu lưu DB thất bại
+            backup_database()
+        except Exception:
+            pass
 
         return jsonify({
-            "sentiment": sentiment,
-            "topic": topic_result,
-            "confidence": {
-                "sentiment": sentiment_confidence,
-                "topic": topic_confidence
-            }
+            "results": results,
+            "has_multiple_topics": len(results) > 1
         })
     except Exception as e:
         return jsonify({"error": f"Có lỗi xảy ra khi xử lý: {str(e)}"}), 500
 
-
-# Khởi tạo database
-with app.app_context():
-    db.create_all()
-    
-    # Kiểm tra và thêm cột is_admin nếu chưa có
+@app.route('/admin/backup', methods=['POST'])
+@admin_required
+def manual_backup():
     try:
-        # Thử query để kiểm tra xem cột is_admin có tồn tại không
+        if backup_database():
+            return jsonify({"success": True, "message": "Backup completed successfully"})
+        else:
+            return jsonify({"success": False, "message": "Backup failed"}), 500
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Backup error: {str(e)}"}), 500
+
+@app.route('/admin/restore', methods=['POST'])
+@admin_required
+def manual_restore():
+    try:
+        if restore_database():
+            return jsonify({"success": True, "message": "Database restored successfully"})
+        else:
+            return jsonify({"success": False, "message": "Restore failed"}), 500
+    except Exception as e:
+        return jsonify({"success": False, "message": f"Restore error: {str(e)}"}), 500
+
+with app.app_context():
+    db_manager.initialize_database_if_needed()
+    db.create_all()
+    db_manager.backup_database()
+    
+    try:
         db.session.execute(db.text("SELECT is_admin FROM users LIMIT 1"))
     except Exception:
-        # Nếu cột không tồn tại, thêm cột mới
-        print("🔄 Đang thêm cột is_admin vào bảng users...")
         try:
             db.session.execute(db.text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"))
             db.session.commit()
-            print("✅ Đã thêm cột is_admin vào database")
-        except Exception as e:
-            print(f"⚠️ Lỗi khi thêm cột: {e}")
+        except Exception:
+            pass
     
-    # Tạo tài khoản admin mặc định nếu chưa có
     try:
+        total_users = User.query.count()
         admin_user = User.query.filter_by(username='admin').first()
-        if not admin_user:
+        if not admin_user and total_users == 0:
             admin_user = User(username='admin', is_admin=True)
             admin_user.set_password('123456')
             db.session.add(admin_user)
             db.session.commit()
-            print("✅ Đã tạo tài khoản admin mặc định (username: admin, password: 123456)")
-        else:
-            # Cập nhật user admin hiện có thành admin nếu chưa
-            if not admin_user.is_admin:
-                admin_user.is_admin = True
-                db.session.commit()
-                print("✅ Đã cập nhật tài khoản admin hiện có")
-    except Exception as e:
-        print(f"⚠️ Lỗi khi tạo/cập nhật admin: {e}")
-    
-    print("✅ Database đã sẵn sàng!")
+        elif admin_user and not admin_user.is_admin:
+            admin_user.is_admin = True
+            db.session.commit()
+    except Exception:
+        pass
 
 @app.route("/analyze-csv", methods=["POST"])
 @login_required
 def analyze_csv():
-    """Phân tích nhiều feedback từ file CSV"""
     try:
         if 'csvFile' not in request.files:
             return jsonify({'error': 'Không tìm thấy file CSV'}), 400
@@ -431,22 +510,18 @@ def analyze_csv():
         if not file.filename.lower().endswith('.csv'):
             return jsonify({'error': 'File phải có định dạng CSV'}), 400
         
-        # Đọc và validate file CSV
         try:
-            # Thử decode file với UTF-8
             file_content = file.stream.read().decode("UTF8")
         except UnicodeDecodeError:
-            return jsonify({'error': 'File CSV phải được mã hóa UTF-8. Vui lòng lưu file với encoding UTF-8 và thử lại.'}), 400
+            return jsonify({'error': 'File CSV phải được mã hóa UTF-8'}), 400
         
         try:
             stream = io.StringIO(file_content, newline=None)
             csv_input = csv.DictReader(stream)
             
-            # Kiểm tra file có header không
             if not csv_input.fieldnames:
-                return jsonify({'error': 'File CSV không có header (tên cột). Vui lòng thêm header vào file CSV.'}), 400
+                return jsonify({'error': 'File CSV không có header'}), 400
             
-            # Tìm cột chứa feedback
             feedback_column = None
             available_columns = []
             for col in csv_input.fieldnames:
@@ -457,25 +532,22 @@ def analyze_csv():
             
             if not feedback_column:
                 return jsonify({
-                    'error': f'Không tìm thấy cột chứa feedback. Các cột có sẵn: {", ".join(available_columns)}. Tên cột phải là: feedback, text, content hoặc comment'
+                    'error': f'Không tìm thấy cột chứa feedback. Các cột: {", ".join(available_columns)}'
                 }), 400
             
-            # Kiểm tra file có dữ liệu không
             rows = list(csv_input)
             if not rows:
-                return jsonify({'error': 'File CSV không có dữ liệu (chỉ có header). Vui lòng thêm dữ liệu vào file.'}), 400
-                
+                return jsonify({'error': 'File CSV không có dữ liệu'}), 400
         except csv.Error as e:
-            return jsonify({'error': f'File CSV không đúng định dạng: {str(e)}. Vui lòng kiểm tra lại file CSV.'}), 400
+            return jsonify({'error': f'File CSV không đúng định dạng: {str(e)}'}), 400
         except Exception as e:
             return jsonify({'error': f'Lỗi khi đọc file CSV: {str(e)}'}), 400
         
-        feedbacks = []
         results = []
         processed_count = 0
         error_count = 0
         
-        for row_num, row in enumerate(rows, start=1):  # Bắt đầu từ 1 vì hiển thị số dòng thực tế (trừ header)
+        for row_num, row in enumerate(rows, start=1):
             feedback_text = row[feedback_column].strip()
             
             if not feedback_text:
@@ -488,62 +560,47 @@ def analyze_csv():
                 continue
             
             try:
-                # Phân tích feedback
-                inputs = tokenizer(feedback_text, return_tensors="pt", padding=True, truncation=True, max_length=512)
-                inputs = {k: v.to(device) for k, v in inputs.items()}
+                if tokenizer is None or model is None:
+                    results.append({
+                        "row": row_num,
+                        "feedback": feedback_text,
+                        "error": "Model or tokenizer not loaded"
+                    })
+                    continue
                 
-                with torch.no_grad():
-                    # Gọi model với đúng parameters
-                    sentiment_logits, topic_logits = model(inputs["input_ids"], inputs["attention_mask"])
-                    
-                    sentiment_probs = torch.softmax(sentiment_logits, dim=-1)
-                    topic_probs = torch.softmax(topic_logits, dim=-1)
-                    
-                    sentiment_pred = torch.argmax(sentiment_probs, dim=-1).item()
-                    topic_pred = torch.argmax(topic_probs, dim=-1).item()
-                    
-                    sentiment_confidence = sentiment_probs[0][sentiment_pred].item()
-                    topic_confidence = topic_probs[0][topic_pred].item()
+                row_topics = analyze_feedback(feedback_text)
                 
-                # Map predictions
-                sentiment_labels = ['negative', 'neutral', 'positive']
-                topic_labels = ['lecturer', 'training_program', 'facility', 'others']
-                
-                sentiment = sentiment_labels[sentiment_pred]
-                topic = topic_labels[topic_pred]
-                
-                # Lưu vào database
                 try:
-                    feedback = Feedback(
-                        text=feedback_text,
-                        sentiment=sentiment,
-                        topic=topic,
-                        sentiment_confidence=sentiment_confidence,
-                        topic_confidence=topic_confidence,
-                        user_id=current_user.id
-                    )
-                    db.session.add(feedback)
-                    feedbacks.append(feedback)
+                    save_feedback_to_db(feedback_text, row_topics, current_user.id)
+                    
+                    if row_topics:
+                        first = row_topics[0]
+                        first_topic = first['topic']
+                        first_sentiment = first['sentiment']
+                        first_sentiment_conf = first.get('sentiment_confidence', first['confidence'])
+                        first_topic_conf = first['confidence']
+                    else:
+                        first_topic = 'others'
+                        first_sentiment = 'neutral'
+                        first_sentiment_conf = 0.0
+                        first_topic_conf = 0.0
                     
                     results.append({
                         'row': row_num,
                         'text': feedback_text[:100] + '...' if len(feedback_text) > 100 else feedback_text,
-                        'sentiment': sentiment,
-                        'topic': topic,
-                        'sentiment_confidence': round(sentiment_confidence * 100, 1),
-                        'topic_confidence': round(topic_confidence * 100, 1),
+                        'sentiment': first_sentiment,
+                        'topic': first_topic,
+                        'sentiment_confidence': round(first_sentiment_conf * 100, 1),
+                        'topic_confidence': round(first_topic_conf * 100, 1),
                         'success': True
                     })
-                    
                     processed_count += 1
-                    
-                except Exception as db_error:
-                    print(f"Database error for row {row_num}: {db_error}")
+                except Exception as db_err:
                     error_count += 1
                     results.append({
                         'row': row_num,
                         'text': feedback_text[:100] + '...' if len(feedback_text) > 100 else feedback_text,
-                        'error': f'Lỗi lưu database: {str(db_error)}'
+                        'error': f'Lỗi lưu database: {str(db_err)}'
                     })
                 
             except Exception as e:
@@ -554,23 +611,19 @@ def analyze_csv():
                     'error': f'Lỗi phân tích: {str(e)}'
                 })
         
-        # Commit tất cả feedback vào database
         try:
             db.session.commit()
-            print(f"✅ Đã lưu {processed_count} feedback vào database")
+            backup_database()
         except Exception as commit_error:
             db.session.rollback()
-            print(f"❌ Lỗi khi commit database: {commit_error}")
-            return jsonify({
-                'error': f'Lỗi khi lưu dữ liệu: {str(commit_error)}'
-            }), 500
+            return jsonify({'error': f'Lỗi khi lưu dữ liệu: {str(commit_error)}'}), 500
         
         return jsonify({
             'success': True,
             'total_rows': len(results),
             'processed_count': processed_count,
             'error_count': error_count,
-            'results': results[:50],  # Chỉ trả về 50 kết quả đầu tiên để tránh response quá lớn
+            'results': results[:50],
             'message': f'Đã xử lý {processed_count}/{len(results)} feedback thành công'
         })
         
@@ -581,6 +634,5 @@ def analyze_csv():
         }), 500
 
 if __name__ == "__main__":
-    # Hugging Face Spaces configuration
     debug = os.environ.get("DEBUG", "False").lower() == "true"
     app.run(host="0.0.0.0", port=7860, debug=debug)

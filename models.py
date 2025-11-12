@@ -14,7 +14,6 @@ class User(UserMixin, db.Model):
     is_admin = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
-    # Relationship với feedbacks
     feedbacks = db.relationship('Feedback', backref='user', lazy=True)
     
     def set_password(self, password):
@@ -33,11 +32,11 @@ class Feedback(db.Model):
     
     id = db.Column(db.Integer, primary_key=True)
     text = db.Column(db.Text, nullable=False)
-    sentiment = db.Column(db.String(20), nullable=False)  # positive, neutral, negative
-    topic = db.Column(db.String(50), nullable=False)      # lecturer, training_program, facility, others
+    sentiment = db.Column(db.String(20), nullable=False)
+    topic = db.Column(db.String(50), nullable=False)
     sentiment_confidence = db.Column(db.Float, nullable=False)
     topic_confidence = db.Column(db.Float, nullable=False)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)  # Bắt buộc vì đã login_required
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def __repr__(self):

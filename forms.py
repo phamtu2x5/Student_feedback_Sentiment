@@ -1,5 +1,5 @@
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, SubmitField, TextAreaField
+from wtforms import StringField, PasswordField, SubmitField
 from wtforms.validators import DataRequired, Length, EqualTo, ValidationError
 from models import User
 
@@ -37,10 +37,3 @@ class LoginForm(FlaskForm):
     
     submit = SubmitField('Đăng nhập')
 
-class FeedbackForm(FlaskForm):
-    text = TextAreaField('Feedback của bạn', validators=[
-        DataRequired(message='Vui lòng nhập feedback'),
-        Length(min=10, max=1000, message='Feedback phải từ 10-1000 ký tự')
-    ])
-    
-    submit = SubmitField('Phân Tích Feedback')
