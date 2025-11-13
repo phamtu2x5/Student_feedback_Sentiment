@@ -105,7 +105,7 @@ def analyze_feedback(text):
             inputs = tokenizer(
                 prompt, text,
                 return_tensors="pt", 
-                truncation=True, 
+                truncation="only_second",  # Chỉ cắt text (second sequence), giữ nguyên prompt
                 padding=True, 
                 max_length=MAX_LEN
             ).to(device)
@@ -120,20 +120,42 @@ def analyze_feedback(text):
     p_none = probs[:, 0]
     conf_not_none = 1.0 - p_none
     
-    KW_BOOST = 0.08
+    # Giảm cường độ boost để tránh false positive từ keywords
+    KW_BOOST = 0.02  # Giảm từ 0.05 xuống 0.02 (từ 5% xuống 2%)
     conf_not_none_boosted = conf_not_none.clone()
     for i, has_kw in enumerate(has_keywords):
         if has_kw:
             conf_not_none_boosted[i] = min(1.0, conf_not_none_boosted[i] + KW_BOOST)
     
-    keep_indices = [i for i in range(len(ASPECTS_EN)) if conf_not_none_boosted[i] >= tau_len]
+    # Bước 1: Lọc aspects có confidence >= threshold VÀ có keywords
+    # Nếu không có keywords, cần confidence cao hơn nhiều (>= 0.85)
+    keep_indices = []
+    for i in range(len(ASPECTS_EN)):
+        if has_keywords[i]:
+            # Có keywords: cần confidence >= threshold
+            if conf_not_none_boosted[i] >= tau_len:
+                keep_indices.append(i)
+        else:
+            # Không có keywords: cần confidence rất cao (>= 0.85)
+            if conf_not_none_boosted[i] >= 0.85:
+                keep_indices.append(i)
     
-    if len(keep_indices) > 0:
-        tau_len_adjusted = tau_len - 0.12
-        for i in range(len(ASPECTS_EN)):
-            if i not in keep_indices and conf_not_none_boosted[i] >= tau_len_adjusted:
-                if has_keywords[i] or conf_not_none_boosted[i] >= tau_len_adjusted + 0.05:
-                    keep_indices.append(i)
+    # Bước 2: Kiểm tra xem có aspect nào có confidence rất cao không (>95%)
+    high_confidence_indices = [i for i in keep_indices if conf_not_none_boosted[i] >= 0.95]
+    
+    # Bước 3: Nếu có aspect với confidence rất cao, loại bỏ các aspects khác không có keywords
+    if len(high_confidence_indices) > 0:
+        # Loại bỏ các aspects không có keywords nếu đã có aspect khác có confidence rất cao
+        keep_indices = [i for i in keep_indices if has_keywords[i] or i in high_confidence_indices]
+        
+        # Nếu vẫn còn slot, có thể thêm aspects khác nếu có keywords VÀ confidence đủ cao
+        if len(keep_indices) < len(ASPECTS_EN):
+            tau_len_adjusted = tau_len - 0.05  # Chỉ giảm 5%
+            for i in range(len(ASPECTS_EN)):
+                if i not in keep_indices:
+                    # Chỉ giữ nếu có keywords VÀ confidence >= adjusted + 0.10
+                    if has_keywords[i] and conf_not_none_boosted[i] >= tau_len_adjusted + 0.10:
+                        keep_indices.append(i)
     
     if not keep_indices:
         return []
@@ -150,7 +172,7 @@ def analyze_feedback(text):
         
         min_margin_adj = MIN_MARGIN
         if has_keywords[i]:
-            min_margin_adj = MIN_MARGIN - 0.01
+            min_margin_adj = MIN_MARGIN - 0.02
         
         if top_p < MIN_SENT_PROB or margin < min_margin_adj:
             continue

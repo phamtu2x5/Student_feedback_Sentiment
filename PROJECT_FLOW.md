@@ -147,7 +147,7 @@ Khi chạy `python app.py`, ứng dụng khởi động theo các bước sau:
 
 **File: `static/js/app.js` (function `handleFormSubmit`)**
 
-1. Lấy text từ textarea 
+1. Lấy text từ textarea
 2. Validate: không được rỗng, không quá dài
 3. Hiển thị loading spinner
 4. Gửi POST request đến `/predict` với body: `{ "text": "feedback text" }`
