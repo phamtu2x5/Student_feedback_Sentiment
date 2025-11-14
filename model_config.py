@@ -321,7 +321,6 @@ def _pick_subprompt(aspect: str, sentence: str) -> str:
     return ASPECT_PROMPTS[aspect]["_default"]
 
 
-
 def _has_any_kw(s_norm: str) -> bool:
     """Kiểm tra sentence có keyword của bất kỳ aspect nào không"""
     for aspect_vi in ASPECTS_VI:

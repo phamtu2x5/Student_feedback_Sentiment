@@ -105,7 +105,7 @@ def analyze_feedback(text):
             inputs = tokenizer(
                 prompt, text,
                 return_tensors="pt", 
-                truncation="only_second",  # Chỉ cắt text (second sequence), giữ nguyên prompt
+                truncation="only_second", 
                 padding=True, 
                 max_length=MAX_LEN
             ).to(device)
@@ -120,8 +120,7 @@ def analyze_feedback(text):
     p_none = probs[:, 0]
     conf_not_none = 1.0 - p_none
     
-    # Giảm cường độ boost để tránh false positive từ keywords
-    KW_BOOST = 0.02  # Giảm từ 0.05 xuống 0.02 (từ 5% xuống 2%)
+    KW_BOOST = 0.02  
     conf_not_none_boosted = conf_not_none.clone()
     for i, has_kw in enumerate(has_keywords):
         if has_kw:
